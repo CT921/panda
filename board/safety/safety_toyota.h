@@ -306,7 +306,7 @@ static int toyota_fwd_hook(int bus_num, CANPacket_t *to_fwd) {
     // WILL BE BANNED BY COMMA, THIS FORK'S MAINTAINERS ARE NOT RESPONSIBLE
     // FOR ANY OF YOUR LOSSES
     if (tss2 && controls_allowed) { // block all messages on TSS 2.0 when controls are allowed
-      int block_msg = is_lkas_msg || is_acc_msg;
+    int block_msg = is_lkas_msg || (is_acc_msg && !toyota_stock_longitudinal);
       if (!block_msg) {
         bus_fwd = 0;
       }
