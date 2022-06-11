@@ -51,12 +51,7 @@ bool toyota_alt_brake = false;
 bool toyota_stock_longitudinal = false;
 int toyota_dbc_eps_torque_factor = 100;   // conversion factor for STEER_TORQUE_EPS in %: see dbc file
 
-// steering faults occur when the angle rate is above a certain threshold for too long,
-// allow setting STEER_REQUEST bit to 0 with a non-zero desired torque when expected
-const uint8_t TOYOTA_MAX_STEER_RATE_FRAMES = 19U;
-uint8_t toyota_steer_req_matches;  // counter for steer request bit matching non-zero torque
-
-static uint8_t toyota_compute_checksum(CANPacket_t *to_push) {
+static uint32_t toyota_compute_checksum(CANPacket_t *to_push) {
   int addr = GET_ADDR(to_push);
   int len = GET_LEN(to_push);
   uint8_t checksum = (uint8_t)(addr) + (uint8_t)((unsigned int)(addr) >> 8U) + (uint8_t)(len);
@@ -66,7 +61,7 @@ static uint8_t toyota_compute_checksum(CANPacket_t *to_push) {
   return checksum;
 }
 
-static uint8_t toyota_get_checksum(CANPacket_t *to_push) {
+static uint32_t toyota_get_checksum(CANPacket_t *to_push) {
   int checksum_byte = GET_LEN(to_push) - 1U;
   return (uint8_t)(GET_BYTE(to_push, checksum_byte));
 }
@@ -221,7 +216,6 @@ static int toyota_tx_hook(CANPacket_t *to_send, bool longitudinal_allowed) {
     if (addr == 0x2E4) {
       int desired_torque = (GET_BYTE(to_send, 1) << 8) | GET_BYTE(to_send, 2);
       desired_torque = to_signed(desired_torque, 16);
-      bool steer_req = GET_BIT(to_send, 0U) != 0U;
       bool violation = 0;
 
       uint32_t ts = microsecond_timer_get();
@@ -249,19 +243,6 @@ static int toyota_tx_hook(CANPacket_t *to_send, bool longitudinal_allowed) {
         }
       }
 
-      // handle steer_req bit mismatches: we set the bit to 0 at an expected
-      // interval to bypass an EPS fault, violation if we exceed that frequency
-      bool steer_req_mismatch = (desired_torque != 0) && !steer_req;
-      if (!steer_req_mismatch) {
-        toyota_steer_req_matches = MIN(toyota_steer_req_matches + 1U, 255U);
-      } else {
-        // disallow torque cut if not enough recent matching steer_req messages
-        if (toyota_steer_req_matches < (TOYOTA_MAX_STEER_RATE_FRAMES - 1U)) {
-          violation = 1;
-        }
-        toyota_steer_req_matches = 0U;
-      }
-
       // no torque if controls is not allowed
       if (!controls_allowed && (desired_torque != 0)) {
         violation = 1;
@@ -269,7 +250,6 @@ static int toyota_tx_hook(CANPacket_t *to_send, bool longitudinal_allowed) {
 
       // reset to 0 if either controls is not allowed or there's a violation
       if (violation || !controls_allowed) {
-        toyota_steer_req_matches = 0U;
         desired_torque_last = 0;
         rt_torque_last = 0;
         ts_last = ts;
@@ -293,7 +273,6 @@ static const addr_checks* toyota_init(uint16_t param) {
   controls_allowed = 0;
   relay_malfunction_reset();
   gas_interceptor_detected = 0;
-  toyota_steer_req_matches = 0U;
   toyota_alt_brake = GET_FLAG(param, TOYOTA_PARAM_ALT_BRAKE);
   toyota_stock_longitudinal = GET_FLAG(param, TOYOTA_PARAM_STOCK_LONGITUDINAL);
   toyota_dbc_eps_torque_factor = param & TOYOTA_EPS_FACTOR;
@@ -315,7 +294,7 @@ static int toyota_fwd_hook(int bus_num, CANPacket_t *to_fwd) {
     int is_lkas_msg = ((addr == 0x2E4) || (addr == 0x412) || (addr == 0x191));
     // in TSS2 the camera does ACC as well, so filter 0x343
     int is_acc_msg = (addr == 0x343);
-    int block_msg = is_lkas_msg || is_acc_msg;
+    int block_msg = is_lkas_msg || (is_acc_msg && !toyota_stock_longitudinal);
     if (!block_msg) {
       bus_fwd = 0;
     }
