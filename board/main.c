@@ -248,7 +248,7 @@ void tick_handler(void) {
         }
 
         // enter CDP mode when car starts to ensure we are charging a turned off EON
-        if (check_started() && ((usb_power_mode != USB_POWER_CDP) || !usb_enumerated)) {
+        if (check_started() && (usb_power_mode != USB_POWER_CDP)) {
           current_board->set_usb_power_mode(USB_POWER_CDP);
         }
       }
