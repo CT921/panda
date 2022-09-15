@@ -27,6 +27,7 @@ const int TOYOTA_GAS_INTERCEPTOR_THRSLD = 805;
 const CanMsg TOYOTA_TX_MSGS[] = {{0x283, 0, 7}, {0x2E6, 0, 8}, {0x2E7, 0, 8}, {0x33E, 0, 7}, {0x344, 0, 8}, {0x365, 0, 7}, {0x366, 0, 7}, {0x4CB, 0, 8},  // DSU bus 0
                                  {0x128, 1, 6}, {0x141, 1, 4}, {0x160, 1, 8}, {0x161, 1, 7}, {0x470, 1, 4},  // DSU bus 1
                                  {0x2E4, 0, 5}, {0x191, 0, 8}, {0x411, 0, 8}, {0x412, 0, 8}, {0x343, 0, 8}, {0x1D2, 0, 8},  // LKAS + ACC
+                                 {0x750, 0, 8}, // white list 0x750 for Enhanced Diagnostic Request
                                  {0x200, 0, 6}};  // interceptor
 
 AddrCheckStruct toyota_addr_checks[] = {
@@ -38,7 +39,6 @@ AddrCheckStruct toyota_addr_checks[] = {
 };
 #define TOYOTA_ADDR_CHECKS_LEN (sizeof(toyota_addr_checks) / sizeof(toyota_addr_checks[0]))
 addr_checks toyota_rx_checks = {toyota_addr_checks, TOYOTA_ADDR_CHECKS_LEN};
-int tss2 = 0;
 
 // safety param flags
 // first byte is for eps factor, second is for flags
@@ -153,10 +153,6 @@ static int toyota_tx_hook(CANPacket_t *to_send, bool longitudinal_allowed) {
   int addr = GET_ADDR(to_send);
   int bus = GET_BUS(to_send);
 
-  if (!controls_allowed) {
-    tx = 0;
-  }
-
   if (!msg_allowed(to_send, TOYOTA_TX_MSGS, sizeof(TOYOTA_TX_MSGS)/sizeof(TOYOTA_TX_MSGS[0]))) {
     tx = 0;
   }
@@ -192,8 +188,6 @@ static int toyota_tx_hook(CANPacket_t *to_send, bool longitudinal_allowed) {
       }
 
       bool violation = max_limit_check(desired_accel, TOYOTA_MAX_ACCEL, TOYOTA_MIN_ACCEL);
-
-      tx = 1;
 
       if (violation) {
         tx = 0;
@@ -322,31 +316,9 @@ static int toyota_fwd_hook(int bus_num, CANPacket_t *to_fwd) {
     int is_lkas_msg = ((addr == 0x2E4) || (addr == 0x412) || (addr == 0x191));
     // in TSS2 the camera does ACC as well, so filter 0x343
     int is_acc_msg = (addr == 0x343);
-    // detect if car has LTA message
-    if (addr == 0x191) {
-      tss2 = 1;
-    }
-    // keep factory Lane Departure Warning when openpilot is not engaged
-    // this also eliminates the dash error if the comma device was to reboot
-    // when the car is running by keep the messages flowing uninterrupted
-    // THIS IS A SAFETY VIOLATION, DO NOT ENABLE UPLOADER OR YOUR DEVICE 
-    // WILL BE BANNED BY COMMA, THIS FORK'S MAINTAINERS ARE NOT RESPONSIBLE
-    // FOR ANY OF YOUR LOSSES
-    if (tss2 && controls_allowed) { // block all messages on TSS 2.0 when controls are allowed
     int block_msg = is_lkas_msg || (is_acc_msg && !toyota_stock_longitudinal);
-      if (!block_msg) {
-        bus_fwd = 0;
-      }
-    } else if (tss2 && !controls_allowed) { // don't block LDA message on TSS 2.0 when not engaged
-      int block_msg = is_acc_msg;
-      if (!block_msg) {
-        bus_fwd = 0;
-      }
-    } else {  // only block on TSS-P cars when openpilot is not in control
-      int block_msg = is_lkas_msg || is_acc_msg;
-      if (!block_msg || !controls_allowed) {
-        bus_fwd = 0;
-      }
+    if (!block_msg) {
+      bus_fwd = 0;
     }
   }
 
