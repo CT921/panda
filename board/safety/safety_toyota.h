@@ -224,10 +224,11 @@ static int toyota_tx_hook(CANPacket_t *to_send, bool longitudinal_allowed) {
       desired_torque = to_signed(desired_torque, 16);
       bool steer_req = GET_BIT(to_send, 0U) != 0U;
       bool violation = 0;
+      bool alka_enabled = alternative_experience & ALT_EXP_ALKA;
 
       uint32_t ts = microsecond_timer_get();
 
-      if (controls_allowed) {
+      if (controls_allowed || alka_enabled) {
 
         // *** global torque limit check ***
         violation |= max_limit_check(desired_torque, TOYOTA_MAX_TORQUE, -TOYOTA_MAX_TORQUE);
@@ -264,12 +265,12 @@ static int toyota_tx_hook(CANPacket_t *to_send, bool longitudinal_allowed) {
       }
 
       // no torque if controls is not allowed
-      if (!controls_allowed && (desired_torque != 0)) {
+      if ((!controls_allowed && !alka_enabled) && (desired_torque != 0)) {
         violation = 1;
       }
 
       // reset to 0 if either controls is not allowed or there's a violation
-      if (violation || !controls_allowed) {
+      if (violation || (!controls_allowed && !alka_enabled)) {
         toyota_steer_req_matches = 0U;
         desired_torque_last = 0;
         rt_torque_last = 0;
