@@ -188,7 +188,7 @@ class Panda:
   # dp - 2 extra "B" at the end:
   # "usb_power_mode": a[23],
   # "torque_interceptor_detected": a[24],
-  HEALTH_STRUCT = struct.Struct("<IIIIIIIIIBBBBBBHBBBHfBBBBBB")
+  HEALTH_STRUCT = struct.Struct("<IIIIIIIIIBBBBBBHBBBHfBBHBBB")
   CAN_HEALTH_STRUCT = struct.Struct("<BIBBBBBBBBIIIIIIIHHBBB")
 
   F2_DEVICES = (HW_TYPE_PEDAL, )
