@@ -274,6 +274,7 @@ void generic_rx_checks(bool stock_ecu_detected) {
   if ((safety_mode_cnt > RELAY_TRNS_TIMEOUT) && stock_ecu_detected) {
     relay_malfunction_set();
   }
+  //generic_rx_checks
 }
 
 void relay_malfunction_set(void) {
@@ -493,6 +494,10 @@ float interpolate(struct lookup_t xy, float x) {
     }
   }
   return ret;
+}
+
+int ROUND(float val) {
+  return val + ((val > 0.0) ? 0.5 : -0.5);
 }
 
 // Safety checks for longitudinal actuation
