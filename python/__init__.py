@@ -17,7 +17,7 @@ from .base import BaseHandle
 from .constants import FW_PATH, McuType
 from .dfu import PandaDFU
 from .isotp import isotp_send, isotp_recv
-from .spi import PandaSpiHandle, PandaSpiException
+from .spi import PandaSpiHandle, PandaSpiException, PandaProtocolMismatch
 from .usb import PandaUsbHandle
 
 __version__ = '0.0.10'
@@ -202,12 +202,12 @@ class Panda:
 
   CAN_PACKET_VERSION = 4
   HEALTH_PACKET_VERSION = 14
-  CAN_HEALTH_PACKET_VERSION = 4
-  # dp - 2 extra "B" at the end:
+  CAN_HEALTH_PACKET_VERSION = 5
+  #dp - 2 extra "B" at the end:
   # "usb_power_mode": a[23],
   # "torque_interceptor_detected": a[24],
   HEALTH_STRUCT = struct.Struct("<IIIIIIIIIBBBBBBHBBBHfBBHBHHBB")
-  CAN_HEALTH_STRUCT = struct.Struct("<BIBBBBBBBBIIIIIIIHHBBB")
+  CAN_HEALTH_STRUCT = struct.Struct("<BIBBBBBBBBIIIIIIIHHBBBIIII")
 
   F2_DEVICES = (HW_TYPE_PEDAL, )
   F4_DEVICES = (HW_TYPE_WHITE_PANDA, HW_TYPE_GREY_PANDA, HW_TYPE_BLACK_PANDA, HW_TYPE_UNO, HW_TYPE_DOS)
@@ -258,6 +258,7 @@ class Panda:
   FLAG_GM_HW_CAM_LONG = 2
 
   FLAG_FORD_LONG_CONTROL = 1
+  FLAG_FORD_CANFD = 2
 
   def __init__(self, serial: Optional[str] = None, claim: bool = True, disable_checks: bool = True):
     self._connect_serial = serial
@@ -329,16 +330,30 @@ class Panda:
       self.set_power_save(0)
 
   @staticmethod
-  def spi_connect(serial):
+  def spi_connect(serial, ignore_version=False):
     # get UID to confirm slave is present and up
     handle = None
     spi_serial = None
     bootstub = None
+    spi_version = None
     try:
       handle = PandaSpiHandle()
-      dat = handle.controlRead(Panda.REQUEST_IN, 0xc3, 0, 0, 12, timeout=100)
-      spi_serial = binascii.hexlify(dat).decode()
-      bootstub = Panda.flasher_present(handle)
+
+      # connect by protcol version
+      try:
+        dat = handle.get_protocol_version()
+        spi_serial = binascii.hexlify(dat[:12]).decode()
+        pid = dat[13]
+        if pid not in (0xcc, 0xee):
+          raise PandaSpiException("invalid bootstub status")
+        bootstub = pid == 0xee
+        spi_version = dat[14]
+      except PandaSpiException:
+        # fallback, we'll raise a protocol mismatch below
+        dat = handle.controlRead(Panda.REQUEST_IN, 0xc3, 0, 0, 12, timeout=100)
+        spi_serial = binascii.hexlify(dat).decode()
+        bootstub = Panda.flasher_present(handle)
+        spi_version = 0
     except PandaSpiException:
       pass
 
@@ -347,6 +362,12 @@ class Panda:
       handle = None
       spi_serial = None
       bootstub = False
+
+    # ensure our protocol version matches the panda
+    if handle is not None and not ignore_version:
+      if spi_version != handle.PROTOCOL_VERSION:
+        err = f"panda protocol mismatch: expected {handle.PROTOCOL_VERSION}, got {spi_version}. reflash panda"
+        raise PandaProtocolMismatch(err)
 
     return handle, spi_serial, bootstub, None
 
@@ -419,7 +440,7 @@ class Panda:
 
   @staticmethod
   def spi_list():
-    _, serial, _, _ = Panda.spi_connect(None)
+    _, serial, _, _ = Panda.spi_connect(None, ignore_version=True)
     if serial is not None:
       return [serial, ]
     return []
@@ -656,6 +677,10 @@ class Panda:
       "canfd_enabled": a[19],
       "brs_enabled": a[20],
       "canfd_non_iso": a[21],
+      "irq0_call_rate": a[22],
+      "irq1_call_rate": a[23],
+      "irq2_call_rate": a[24],
+      "can_core_reset_count": a[25],
     }
 
   # ******************* control *******************
@@ -1002,11 +1027,13 @@ class Panda:
     self._handle.controlWrite(Panda.REQUEST_OUT, 0xf7, int(enabled), 0, b'')
 
   # ****************** Logging *****************
-  def get_logs(self, get_all=False):
+  def get_logs(self, last_id=None, get_all=False):
+    assert (last_id is None) or (0 <= last_id < 0xFFFF)
+
     logs = []
-    dat = self._handle.controlRead(Panda.REQUEST_IN, 0xfd, 1 if get_all else 0, 0, 0x40)
+    dat = self._handle.controlRead(Panda.REQUEST_IN, 0xfd, 1 if get_all else 0, last_id if last_id is not None else 0xFFFF, 0x40)
     while len(dat) > 0:
       if len(dat) == 0x40:
         logs.append(unpack_log(dat))
-      dat = self._handle.controlRead(Panda.REQUEST_IN, 0xfd, 0, 0, 0x40)
+      dat = self._handle.controlRead(Panda.REQUEST_IN, 0xfd, 0, 0xFFFF, 0x40)
     return logs
