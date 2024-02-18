@@ -14,22 +14,20 @@ int get_health_pkt(void *dat) {
 
   // Use the GPIO pin to determine ignition or use a CAN based logic
   health->ignition_line_pkt = (uint8_t)(current_board->check_ignition());
-  health->ignition_can_pkt = (uint8_t)(ignition_can);
+  health->ignition_can_pkt = ignition_can;
 
   health->controls_allowed_pkt = controls_allowed;
-  health->gas_interceptor_detected_pkt = gas_interceptor_detected;
   health->safety_tx_blocked_pkt = safety_tx_blocked;
   health->safety_rx_invalid_pkt = safety_rx_invalid;
   health->tx_buffer_overflow_pkt = tx_buffer_overflow;
   health->rx_buffer_overflow_pkt = rx_buffer_overflow;
-  health->torque_interceptor_detected_pkt = torque_interceptor_detected;
   health->gmlan_send_errs_pkt = gmlan_send_errs;
   health->car_harness_status_pkt = harness.status;
   health->safety_mode_pkt = (uint8_t)(current_safety_mode);
   health->safety_param_pkt = current_safety_param;
   health->alternative_experience_pkt = alternative_experience;
-  health->power_save_enabled_pkt = (uint8_t)(power_save_status == POWER_SAVE_STATUS_ENABLED);
-  health->heartbeat_lost_pkt = (uint8_t)(heartbeat_lost);
+  health->power_save_enabled_pkt = power_save_status == POWER_SAVE_STATUS_ENABLED;
+  health->heartbeat_lost_pkt = heartbeat_lost;
   health->safety_rx_checks_invalid = safety_rx_checks_invalid;
 
   health->spi_checksum_error_count = spi_checksum_error_count;
@@ -184,8 +182,8 @@ int comms_control_handler(ControlPacket_t *req, uint8_t *resp) {
       (void)memcpy(resp, ((uint8_t *)UID_BASE), 12);
       resp_len = 12;
       break;
+    // **** 0xc4: get interrupt call rate
     case 0xc4:
-      // **** 0xc4: get interrupt call rate
       if (req->param1 < NUM_INTERRUPTS) {
         uint32_t load = interrupts[req->param1].call_rate;
         resp[0] = (load & 0x000000FFU);
@@ -194,6 +192,10 @@ int comms_control_handler(ControlPacket_t *req, uint8_t *resp) {
         resp[3] = ((load & 0xFF000000U) >> 24U);
         resp_len = 4U;
       }
+      break;
+    // **** 0xc5: DEBUG: drive relay
+    case 0xc5:
+      set_intercept_relay((req->param1 & 0x1U), (req->param1 & 0x2U));
       break;
     // **** 0xd0: fetch serial (aka the provisioned dongle ID)
     case 0xd0:
@@ -398,6 +400,11 @@ int comms_control_handler(ControlPacket_t *req, uint8_t *resp) {
       can_loopback = (req->param1 > 0U);
       can_init_all();
       break;
+// rick - this for c3x (?)
+//    // **** 0xe6: set custom clock source period
+//    case 0xe6:
+//      clock_source_set_period(req->param1);
+//      break;
     // **** 0xe6: set USB power
     case 0xe6:
       current_board->set_usb_power_mode(req->param1);
