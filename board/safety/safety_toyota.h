@@ -48,28 +48,18 @@ const LongitudinalLimits TOYOTA_LONG_LIMITS_SPORT = {
 const int TOYOTA_GAS_INTERCEPTOR_THRSLD = 805;
 #define TOYOTA_GET_INTERCEPTOR(msg) (((GET_BYTE((msg), 0) << 8) + GET_BYTE((msg), 1) + (GET_BYTE((msg), 2) << 8) + GET_BYTE((msg), 3)) / 2U) // avg between 2 tracks
 
-// Stock longitudinal
-#define TOYOTA_COMMON_TX_MSGS                                                                                           \
-  {0x2E4, 0, 5}, {0x191, 0, 8}, {0x412, 0, 8}, {0x343, 0, 8}, {0x1D2, 0, 8},  /* LKAS + LTA + ACC & PCM cancel cmds */  \
-  {0x750, 0, 8}, /* white list 0x750 for Enhanced Diagnostic Request */                                                 \
-
-#define TOYOTA_COMMON_LONG_TX_MSGS                                                                                                          \
-  TOYOTA_COMMON_TX_MSGS                                                                                                                     \
+#define TOYOTA_COMMON_TX_MSGS                                                                                                               \
   {0x283, 0, 7}, {0x2E6, 0, 8}, {0x2E7, 0, 8}, {0x33E, 0, 7}, {0x344, 0, 8}, {0x365, 0, 7}, {0x366, 0, 7}, {0x4CB, 0, 8},  /* DSU bus 0 */  \
   {0x128, 1, 6}, {0x141, 1, 4}, {0x160, 1, 8}, {0x161, 1, 7}, {0x470, 1, 4},  /* DSU bus 1 */                                               \
-  {0x411, 0, 8},  /* PCS_HUD */                                                                                                             \
-  {0x750, 0, 8},  /* radar diagnostic address */                                                                                            \
+  {0x2E4, 0, 5}, {0x191, 0, 8}, {0x411, 0, 8}, {0x412, 0, 8}, {0x343, 0, 8}, {0x1D2, 0, 8},  /* LKAS + ACC */                               \
+  {0x750, 0, 8}, // white list 0x750 for Enhanced Diagnostic Request
 
 const CanMsg TOYOTA_TX_MSGS[] = {
   TOYOTA_COMMON_TX_MSGS
 };
 
-const CanMsg TOYOTA_LONG_TX_MSGS[] = {
-  TOYOTA_COMMON_LONG_TX_MSGS
-};
-
 const CanMsg TOYOTA_INTERCEPTOR_TX_MSGS[] = {
-  TOYOTA_COMMON_LONG_TX_MSGS
+  TOYOTA_COMMON_TX_MSGS
   {0x200, 0, 6},  // gas interceptor
 };
 
@@ -77,9 +67,11 @@ const CanMsg TOYOTA_INTERCEPTOR_TX_MSGS[] = {
   {.msg = {{ 0xaa, 0, 8, .check_checksum = false, .frequency = 83U}, { 0 }, { 0 }}},                        \
   {.msg = {{0x260, 0, 8, .check_checksum = true, .quality_flag = (lta), .frequency = 50U}, { 0 }, { 0 }}},  \
   {.msg = {{0x1D2, 0, 8, .check_checksum = true, .frequency = 33U}, { 0 }, { 0 }}},                         \
-  {.msg = {{0x1D3, 0, 8, .check_checksum = true, .frequency = 33U}, { 0 }, { 0 }}},                         \
   {.msg = {{0x224, 0, 8, .check_checksum = false, .frequency = 40U},                                        \
            {0x226, 0, 8, .check_checksum = false, .frequency = 40U}, { 0 }}},                               \
+
+#define AUTO_BRAKEHOLD_RX_CHECKS                                                                            \
+  {.msg = {{0x1D3, 0, 8, .check_checksum = true, .frequency = 33U}, { 0 }, { 0 }}},                         \
 
 RxCheck toyota_lka_rx_checks[] = {
   TOYOTA_COMMON_RX_CHECKS(false)
@@ -233,11 +225,7 @@ static void toyota_rx_hook(const CANPacket_t *to_push) {
       gas_interceptor_prev = gas_interceptor;
     }
 
-    bool stock_ecu_detected = addr == 0x2E4;  // STEERING_LKA
-    if (!toyota_stock_longitudinal && (addr == 0x343)) {
-      stock_ecu_detected = true;  // ACC_CONTROL
-    }
-    generic_rx_checks(stock_ecu_detected);
+    generic_rx_checks((addr == 0x2E4));
   }
 }
 
@@ -362,22 +350,6 @@ static bool toyota_tx_hook(const CANPacket_t *to_send) {
     }
   }
 
-  // UDS: Only tester present ("\x0F\x02\x3E\x00\x00\x00\x00\x00") allowed on diagnostics address
-  if (addr == 0x750) {
-    // this address is sub-addressed. only allow tester present to radar (0xF)
-    bool invalid_uds_msg = (GET_BYTES(to_send, 0, 4) != 0x003E020FU) || (GET_BYTES(to_send, 4, 4) != 0x0U);
-
-    // DP: Secret sauce.
-    bool dp_valid_uds_msgs = false;
-    dp_valid_uds_msgs |= (GET_BYTES(to_send, 0, 4) == 0x10002141U) || (GET_BYTES(to_send, 0, 4) == 0x60100241U) || (GET_BYTES(to_send, 0, 4) == 0x69210241U);
-    dp_valid_uds_msgs |= (GET_BYTES(to_send, 0, 4) == 0x10002142U) || (GET_BYTES(to_send, 0, 4) == 0x60100242U) || (GET_BYTES(to_send, 0, 4) == 0x10002142U) || (GET_BYTES(to_send, 0, 4) == 0x69210242U);
-    dp_valid_uds_msgs |= (GET_BYTES(to_send, 0, 4) == 0x11300540U);
-
-    if (invalid_uds_msg && !dp_valid_uds_msgs) {
-      tx = false;
-    }
-  }
-
   return tx;
 }
 
@@ -394,19 +366,12 @@ static safety_config toyota_init(uint16_t param) {
   }
 
   safety_config ret;
-  if (toyota_stock_longitudinal) {
-    SET_TX_MSGS(TOYOTA_TX_MSGS, ret);
+  if (toyota_lta) {
+    ret = enable_gas_interceptor ? BUILD_SAFETY_CFG(toyota_lta_interceptor_rx_checks, TOYOTA_INTERCEPTOR_TX_MSGS) : \
+                                   BUILD_SAFETY_CFG(toyota_lta_rx_checks, TOYOTA_TX_MSGS);
   } else {
-    enable_gas_interceptor ? SET_TX_MSGS(TOYOTA_INTERCEPTOR_TX_MSGS, ret) : \
-                             SET_TX_MSGS(TOYOTA_LONG_TX_MSGS, ret);
-  }
-
-  if (enable_gas_interceptor) {
-    toyota_lta ? SET_RX_CHECKS(toyota_lta_interceptor_rx_checks, ret) : \
-                 SET_RX_CHECKS(toyota_lka_interceptor_rx_checks, ret);
-  } else {
-    toyota_lta ? SET_RX_CHECKS(toyota_lta_rx_checks, ret) : \
-                 SET_RX_CHECKS(toyota_lka_rx_checks, ret);
+    ret = enable_gas_interceptor ? BUILD_SAFETY_CFG(toyota_lka_interceptor_rx_checks, TOYOTA_INTERCEPTOR_TX_MSGS) : \
+                                   BUILD_SAFETY_CFG(toyota_lka_rx_checks, TOYOTA_TX_MSGS);
   }
   return ret;
 }
